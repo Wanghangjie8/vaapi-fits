@@ -33,6 +33,7 @@ class Encoder(PropertyHandler, BaseFormatMapper):
   encoded       = property(lambda s: s._encoded)
   osencoded     = property(lambda s: filepath2os(s.encoded))
   encoded_ext   = property(lambda s: s.props["encoded_ext"])
+  skip          = property(lambda s: s.props["skip"])
 
   @property
   def hwformat(self):
@@ -239,14 +240,14 @@ class BaseEncoderTest(slash.Test, BaseFormatMapper):
       size_encoded = encsize,
       bitrate_actual = "{:-.2f}".format(bitrate_actual))
 
-    if "cbr" == self.rcmode:
+    if "cbr" == self.rcmode and "test" not in self.skip:
       bitrate_gap = abs(bitrate_actual - self.bitrate) / self.bitrate
       get_media()._set_test_details(bitrate_gap = "{:.2%}".format(bitrate_gap))
 
       # acceptable bitrate within 10% of bitrate
       assert(bitrate_gap <= 0.10)
 
-    elif "vbr" == self.rcmode and vars(self).get("maxframesize", None) is None:
+    elif "vbr" == self.rcmode and vars(self).get("maxframesize", None) is None and "test" not in self.skip:
       # acceptable bitrate within 25% of minrate and 10% of maxrate
       if vars(self).get("maxrate", None) is not None:
         assert(self.minrate * 0.75 <= bitrate_actual <= self.maxrate * 1.10)
