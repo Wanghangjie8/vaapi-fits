@@ -11,8 +11,10 @@ from ....lib.gstreamer.encoderbase import BaseEncoderTest, Encoder as GstEncoder
 from ....lib.gstreamer.util import have_gst_element, get_elements
 from ....lib.gstreamer.vaapi.util import mapprofile, map_best_hw_format, mapformat
 from ....lib.gstreamer.vaapi.decoder import Decoder
+from ....lib import platform
 from ....lib.codecs import Codec
 from ....lib.common import get_media, mapRangeInt
+from ....lib.formats import PixelFormat
 
 class Encoder(GstEncoder):
   @property
@@ -99,3 +101,111 @@ class EncoderTest(BaseEncoderTest):
 
   def map_profile(self):
     return mapprofile(self.codec, self.profile)
+
+def codec_test_class(codec, engine, bitdepth, **kwargs):
+  # lowpower setting for codecs that support it
+  if codec not in [Codec.JPEG, Codec.MPEG2]:
+    kwargs.update(lowpower = engine == "vdenc")
+
+  # caps lookup translation
+  capcodec = codec
+  if codec in [Codec.HEVC, Codec.VP9]:
+    capcodec = f"{codec}_{bitdepth}"
+
+  # gst element codec translation
+  gstcodec = {
+    Codec.AVC   : "h264",
+    Codec.HEVC  : "h265",
+  }.get(codec, codec)
+
+  @slash.requires(*have_gst_element(f"vaapi{gstcodec}enc"))
+  @slash.requires(*have_gst_element(f"vaapi{gstcodec}dec"))
+  @slash.requires(*platform.have_caps(engine, capcodec))
+  class CodecEncoderTest(EncoderTest):
+    def before(self):
+      super().before()
+      vars(self).update(
+        caps = platform.get_caps(engine, capcodec),
+        codec = codec,
+        gstencoder = f"vaapi{gstcodec}enc",
+        gstdecoder = f"vaapi{gstcodec}dec",
+        **kwargs,
+      )
+
+    def validate_caps(self):
+      assert PixelFormat(self.format).bitdepth == bitdepth
+      super().validate_caps()
+
+    def get_file_ext(self):
+      return {
+        Codec.AVC   : "h264",
+        Codec.HEVC  : "h265",
+        Codec.JPEG  : "mjpeg" if self.frames > 1 else "jpg",
+        Codec.MPEG2 : "m2v",
+        Codec.VP8   : "webm",
+        Codec.VP9   : "webm",
+      }[codec]
+
+  return CodecEncoderTest
+
+##### AVC #####
+AVCCommonArgs = dict(
+  codec         = Codec.AVC,
+  gstmediatype  = "video/x-h264",
+  gstparser     = "h264parse",
+)
+AVCEncoderTest    = codec_test_class(bitdepth = 8, engine = "encode", **AVCCommonArgs)
+AVCEncoderLPTest  = codec_test_class(bitdepth = 8, engine =  "vdenc", **AVCCommonArgs)
+
+##### HEVC #####
+HEVCCommonArgs = dict(
+  codec         = Codec.HEVC,
+  gstmediatype  = "video/x-h265",
+  gstparser     = "h265parse",
+)
+HEVC8EncoderTest    = codec_test_class(bitdepth =  8, engine = "encode", **HEVCCommonArgs)
+HEVC8EncoderLPTest  = codec_test_class(bitdepth =  8, engine =  "vdenc", **HEVCCommonArgs)
+HEVC10EncoderTest   = codec_test_class(bitdepth = 10, engine = "encode", **HEVCCommonArgs)
+HEVC10EncoderLPTest = codec_test_class(bitdepth = 10, engine =  "vdenc", **HEVCCommonArgs)
+HEVC12EncoderTest   = codec_test_class(bitdepth = 12, engine = "encode", **HEVCCommonArgs)
+
+##### VP9 #####
+VP9CommonArgs = dict(
+  codec         = Codec.VP9,
+  gstmediatype  = "video/x-vp9",
+  gstparser     = "vp9parse",
+  gstmuxer      = "matroskamux",
+  gstdemuxer    = "matroskademux",
+)
+VP9EncoderTest      = codec_test_class(bitdepth =  8, engine = "encode", **VP9CommonArgs)
+VP9EncoderLPTest    = codec_test_class(bitdepth =  8, engine =  "vdenc", **VP9CommonArgs)
+VP9_10EncoderTest   = codec_test_class(bitdepth = 10, engine = "encode", **VP9CommonArgs)
+VP9_10EncoderLPTest = codec_test_class(bitdepth = 10, engine =  "vdenc", **VP9CommonArgs)
+
+##### VP8 #####
+VP8EncoderTest  = codec_test_class(
+  codec         = Codec.VP8,
+  engine        = "encode",
+  bitdepth      = 8,
+  gstmediatype  = "video/x-vp8",
+  gstmuxer      = "matroskamux",
+  gstdemuxer    = "matroskademux",
+)
+
+##### JPEG/MJPEG #####
+JPEGEncoderTest = codec_test_class(
+  codec         = Codec.JPEG,
+  engine        = "vdenc",
+  bitdepth      = 8,
+  gstmediatype  = "image/jpeg",
+  gstparser     = "jpegparse",
+)
+
+##### MPEG2 #####
+MPEG2EncoderTest = codec_test_class(
+  codec         = Codec.MPEG2,
+  engine        = "encode",
+  bitdepth      = 8,
+  gstmediatype  = "video/mpeg,mpegversion=2",
+  gstparser     = "mpegvideoparse",
+)

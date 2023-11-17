@@ -14,6 +14,7 @@ from ....lib.ffmpeg.vaapi.util import mapprofile
 from ....lib.ffmpeg.vaapi.decoder import Decoder
 from ....lib.common import mapRangeInt
 from ....lib.codecs import Codec
+from ....lib.formats import PixelFormat
 
 class Encoder(FFEncoder):
   hwaccel = property(lambda s: "vaapi")
@@ -114,24 +115,116 @@ class EncoderTest(BaseEncoderTest):
     m = re.search(ipbmsgs[ipbmode], self.output, re.MULTILINE)
     assert m is not None, "Possible incorrect IPB mode used"
 
-############################
-## VP8 Encoders           ##
-############################
+def codec_test_class(codec, engine, bitdepth, **kwargs):
+  # lowpower setting for codecs that support it
+  if codec not in [Codec.JPEG, Codec.MPEG2]:
+    kwargs.update(lowpower = 1 if engine == "vdenc" else 0)
 
-@slash.requires(*have_ffmpeg_encoder("vp8_vaapi"))
-@slash.requires(*platform.have_caps("encode", "vp8"))
-class VP8EncoderTest(EncoderTest):
-  def before(self):
-    super().before()
-    vars(self).update(
-      codec     = Codec.VP8,
-      ffenc     = "vp8_vaapi",
-      caps      = platform.get_caps("encode", "vp8"),
-      lowpower  = 0,
-    )
+  # caps lookup translation
+  capcodec = codec
+  if codec in [Codec.HEVC, Codec.VP9, Codec.AV1]:
+    capcodec = f"{codec}_{bitdepth}"
 
-  def get_file_ext(self):
-    return "ivf"
+  # ffmpeg plugin codec translation
+  ffcodec = {
+    Codec.AVC   : "h264",
+    Codec.JPEG  : "mjpeg",
+  }.get(codec, codec)
 
-  def get_vaapi_profile(self):
-    return "VAProfileVP8Version0_3"
+  @slash.requires(*have_ffmpeg_encoder(f"{ffcodec}_vaapi"))
+  @slash.requires(*platform.have_caps(engine, capcodec))
+  class CodecEncoderTest(EncoderTest):
+    def before(self):
+      super().before()
+      vars(self).update(
+        caps = platform.get_caps(engine, capcodec),
+        codec = codec,
+        ffenc = f"{ffcodec}_vaapi",
+        **kwargs,
+      )
+
+    def validate_caps(self):
+      assert PixelFormat(self.format).bitdepth == bitdepth
+      super().validate_caps()
+
+    def get_file_ext(self):
+      return {
+        Codec.AVC   : "h264",
+        Codec.HEVC  : "h265",
+        Codec.JPEG  : "mjpeg" if self.frames > 1 else "jpg",
+        Codec.MPEG2 : "m2v",
+        Codec.VP8   : "ivf",
+        Codec.VP9   : "ivf",
+        Codec.AV1   : "ivf",
+      }[codec]
+
+    def get_vaapi_profile(self):
+      if Codec.AVC == codec:
+        return {
+          "high"                  : "VAProfileH264High",
+          "main"                  : "VAProfileH264Main",
+          "constrained-baseline"  : "VAProfileH264ConstrainedBaseline",
+        }[self.profile]
+      elif Codec.HEVC == codec:
+        return {
+          "main"                  : "VAProfileHEVCMain",
+          "main444"               : "VAProfileHEVCMain444",
+          "scc"                   : "VAProfileHEVCSccMain",
+          "scc-444"               : "VAProfileHEVCSccMain444",
+          "main10"                : "VAProfileHEVCMain10",
+          "main444-10"            : "VAProfileHEVCMain444_10",
+          "main12"                : "VAProfileHEVCMain12",
+          "main422-12"            : "VAProfileHEVCMain422_12",
+        }[self.profile]
+      elif Codec.VP8 == codec:
+        return "VAProfileVP8Version0_3"
+      elif Codec.VP9 == codec:
+        pf = PixelFormat(self.format)
+        return {
+          ("YUV420",  8) : "VAProfileVP9Profile0",
+          ("YUV422",  8) : "VAProfileVP9Profile1",
+          ("YUV444",  8) : "VAProfileVP9Profile1",
+          ("YUV420", 10) : "VAProfileVP9Profile2",
+          ("YUV422", 10) : "VAProfileVP9Profile3",
+          ("YUV444", 10) : "VAProfileVP9Profile3",
+        }[(pf.subsampling, pf.bitdepth)]
+      elif Codec.AV1 == codec:
+        return "VAProfileAV1Profile0"
+      elif Codec.JPEG == codec:
+        return "VAProfileJPEGBaseline"
+      elif Codec.MPEG2 == codec:
+        return "VAProfileMPEG2.*"
+
+  return CodecEncoderTest
+
+##### AVC #####
+AVCEncoderTest      = codec_test_class(Codec.AVC, "encode", 8)
+AVCEncoderLPTest    = codec_test_class(Codec.AVC,  "vdenc", 8)
+
+##### HEVC #####
+HEVC8EncoderTest    = codec_test_class(Codec.HEVC, "encode",  8)
+HEVC8EncoderLPTest  = codec_test_class(Codec.HEVC,  "vdenc",  8)
+HEVC10EncoderTest   = codec_test_class(Codec.HEVC, "encode", 10)
+HEVC10EncoderLPTest = codec_test_class(Codec.HEVC,  "vdenc", 10)
+HEVC12EncoderTest   = codec_test_class(Codec.HEVC, "encode", 12)
+
+##### AV1 #####
+AV1EncoderTest      = codec_test_class(Codec.AV1, "encode",  8)
+AV1EncoderLPTest    = codec_test_class(Codec.AV1,  "vdenc",  8)
+AV1_10EncoderTest   = codec_test_class(Codec.AV1, "encode", 10)
+AV1_10EncoderLPTest = codec_test_class(Codec.AV1,  "vdenc", 10)
+
+##### VP9 #####
+VP9EncoderTest      = codec_test_class(Codec.VP9, "encode",  8)
+VP9EncoderLPTest    = codec_test_class(Codec.VP9,  "vdenc",  8)
+VP9_10EncoderTest   = codec_test_class(Codec.VP9, "encode", 10)
+VP9_10EncoderLPTest = codec_test_class(Codec.VP9,  "vdenc", 10)
+
+##### VP8 #####
+VP8EncoderTest      = codec_test_class(Codec.VP8, "encode", 8)
+
+##### JPEG/MJPEG #####
+JPEGEncoderTest     = codec_test_class(Codec.JPEG, "vdenc", 8)
+
+##### MPEG2 #####
+MPEG2EncoderTest    = codec_test_class(Codec.MPEG2, "encode", 8)
